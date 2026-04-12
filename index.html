@@ -15,12 +15,51 @@
       </div>
       <div class="result" id="result-text">请点击地图或搜索地点</div>
     </header>
-    <main id="map-container" aria-label="高德地图"></main>
+    <section class="content">
+      <main id="map-container" aria-label="高德地图"></main>
+      <aside class="weather-panel" aria-label="天气信息">
+        <div class="weather-current">
+          <div class="weather-location" id="weather-location">请选择地点</div>
+          <div class="weather-main-row">
+            <div class="weather-temp" id="weather-temp">--℃</div>
+            <div class="weather-status-wrap">
+              <div class="weather-status" id="weather-status">--</div>
+              <div class="weather-meta" id="weather-wind">风速：-- m/s</div>
+              <div class="weather-meta" id="weather-humidity">湿度：--%</div>
+            </div>
+          </div>
+          <div class="weather-update" id="weather-update">更新时间：--</div>
+        </div>
+        <div class="weather-forecast">
+          <div class="forecast-title">未来5天天气预测</div>
+          <canvas id="temp-chart" width="340" height="170" aria-label="最高最低温折线图"></canvas>
+          <table class="forecast-table" aria-label="天气预测表格">
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>天气</th>
+                <th>最低温</th>
+                <th>最高温</th>
+              </tr>
+            </thead>
+            <tbody id="forecast-body">
+              <tr>
+                <td colspan="4">请选择地点查看天气预测</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </aside>
+    </section>
   </div>
 
   <script>
     window._AMapSecurityConfig = {
-      securityJsCode: "YOUR_AMAP_SECURITY_JS_CODE"
+      securityJsCode: "------"
+    };
+    window.AMAP_KEYS = {
+      jsKey: "------",
+      webServiceKey: "------"
     };
   </script>
   <script src="https://webapi.amap.com/loader.js"></script>
