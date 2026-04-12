@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>高德地图点位选择</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="toolbar">
+      <div class="search-group">
+        <input id="place-input" type="text" placeholder="搜索地名，例如：复旦大学" autocomplete="off">
+        <button id="search-btn" type="button">搜索</button>
+      </div>
+      <div class="result" id="result-text">请点击地图或搜索地点</div>
+    </header>
+    <main id="map-container" aria-label="高德地图"></main>
+  </div>
+
+  <script>
+    window._AMapSecurityConfig = {
+      securityJsCode: "YOUR_AMAP_SECURITY_JS_CODE"
+    };
+  </script>
+  <script src="https://webapi.amap.com/loader.js"></script>
+  <script src="./script.js"></script>
+</body>
+</html>
