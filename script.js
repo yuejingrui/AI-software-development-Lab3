@@ -16,6 +16,16 @@ const weatherHumidity = document.getElementById("weather-humidity");
 const weatherUpdate = document.getElementById("weather-update");
 const forecastBody = document.getElementById("forecast-body");
 const tempChart = document.getElementById("temp-chart");
+const contextContent = document.getElementById("context-content");
+const chatMessages = document.getElementById("chat-messages");
+const chatInput = document.getElementById("chat-input");
+const chatSendBtn = document.getElementById("chat-send-btn");
+
+const glmConfig = window.GLM_CONFIG || {};
+const glmKey = (glmConfig.key || "").trim();
+const glmSecret = (glmConfig.secret || "").trim();
+const CHAT_MODEL = "glm-4-flash";
+const GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 
 const FOCUS_ZOOM = 12;
 const RED_PIN_CONTENT = `
@@ -28,6 +38,18 @@ const BEAUFORT_MPS = [0.1, 0.9, 2.4, 4.4, 6.7, 9.4, 12.3, 15.5, 19.0, 22.6, 26.5
 let map;
 let marker;
 let infoWindow;
+let latestLocationContext = {
+  name: "未选择地点",
+  city: "--",
+  district: "--",
+  adcode: "",
+  lng: null,
+  lat: null
+};
+let latestWeatherContext = {
+  current: null,
+  forecast: []
+};
 
 function updateResult(name, lng, lat) {
   const placeName = name && name.trim() ? name : "未知地点";
@@ -108,6 +130,72 @@ function formatDateLabel(dateText, index) {
   return `${month}-${day}`;
 }
 
+function resolveCityName(cityValue, provinceValue) {
+  if (Array.isArray(cityValue)) {
+    return cityValue[0] || provinceValue || "--";
+  }
+  return cityValue || provinceValue || "--";
+}
+
+function getLocationLabel(city, district) {
+  const safeCity = city || "--";
+  const safeDistrict = district || "--";
+  return `${safeCity} ${safeDistrict}`;
+}
+
+function createAiContextPayload() {
+  const city = latestLocationContext.city || "--";
+  const district = latestLocationContext.district || "--";
+  const current = latestWeatherContext.current;
+  const currentWeatherText = current
+    ? `天气${current.weather || "--"}，温度${current.temperature === null ? "--" : current.temperature}℃，风速${current.windSpeed === null ? "--" : current.windSpeed}米/秒，湿度${current.humidity === null ? "--" : current.humidity}%`
+    : "暂无";
+  const forecastList = (latestWeatherContext.forecast || []).map((item) => ({
+    日期: item.date,
+    天气: item.weather,
+    最低温: item.low === null ? "--" : `${item.low}℃`,
+    最高温: item.high === null ? "--" : `${item.high}℃`
+  }));
+  return {
+    位置: {
+      城市: city,
+      行政区: district
+    },
+    当前天气: currentWeatherText,
+    天气预报: forecastList
+  };
+}
+
+function renderContextPanel() {
+  const payload = createAiContextPayload();
+  contextContent.textContent = JSON.stringify(payload, null, 2);
+}
+
+function escapeHtml(rawText) {
+  return String(rawText || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function appendChatMessage(role, content, locationSnapshot) {
+  const wrapper = document.createElement("div");
+  wrapper.className = `chat-message ${role}`;
+  if (role === "assistant" && locationSnapshot) {
+    const locationLine = document.createElement("div");
+    locationLine.className = "chat-location";
+    locationLine.textContent = `问题地点：${getLocationLabel(locationSnapshot.city, locationSnapshot.district)}`;
+    wrapper.appendChild(locationLine);
+  }
+  const textNode = document.createElement("div");
+  textNode.innerHTML = escapeHtml(content).replaceAll("\n", "<br>");
+  wrapper.appendChild(textNode);
+  chatMessages.appendChild(wrapper);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
 function resetWeatherPanel(message) {
   weatherLocation.textContent = message || "未获取到天气信息";
   weatherTemp.textContent = "--℃";
@@ -117,6 +205,11 @@ function resetWeatherPanel(message) {
   weatherUpdate.textContent = "更新时间：--";
   forecastBody.innerHTML = `<tr><td colspan="4">${message || "暂无天气预测数据"}</td></tr>`;
   drawTempChart([]);
+  latestWeatherContext = {
+    current: null,
+    forecast: []
+  };
+  renderContextPanel();
 }
 
 function renderCurrentWeather(live, displayName) {
@@ -316,6 +409,21 @@ async function loadWeatherByAdcode(adcode, displayName) {
     const rows = getForecastRows(forecast.casts || []);
     renderForecastTable(rows);
     drawTempChart(rows);
+    latestWeatherContext = {
+      current: {
+        temperature: toNumber(live.temperature),
+        weather: live.weather || "--",
+        windSpeed: parseWindSpeed(live.windpower),
+        humidity: toNumber(live.humidity)
+      },
+      forecast: rows.map((row) => ({
+        date: row.label,
+        weather: row.weather,
+        low: row.low,
+        high: row.high
+      }))
+    };
+    renderContextPanel();
   } catch (error) {
     resetWeatherPanel(`天气加载失败：${error.message}`);
     console.error(error);
@@ -342,16 +450,46 @@ async function reverseGeocodeAndLoadWeather(position, fallbackName) {
     const regeocode = await reverseGeocode(position);
     if (regeocode) {
       const formattedAddress = regeocode.formatted_address || fallbackName || "未知地点";
-      const adcode = regeocode.addressComponent && regeocode.addressComponent.adcode;
+      const addressComponent = regeocode.addressComponent || {};
+      const adcode = addressComponent.adcode;
+      const city = resolveCityName(addressComponent.city, addressComponent.province);
+      const district = addressComponent.district || "--";
+      latestLocationContext = {
+        name: formattedAddress,
+        city,
+        district,
+        adcode: adcode || "",
+        lng,
+        lat
+      };
+      renderContextPanel();
       updateResult(formattedAddress, lng, lat);
       showInfoWindow(formattedAddress, lng, lat);
       loadWeatherByAdcode(adcode, formattedAddress);
       return;
     }
+    latestLocationContext = {
+      name: fallbackName || "未知地点",
+      city: "--",
+      district: "--",
+      adcode: "",
+      lng,
+      lat
+    };
+    renderContextPanel();
     updateResult(fallbackName || "未知地点", lng, lat);
     showInfoWindow(fallbackName || "未知地点", lng, lat);
     resetWeatherPanel("逆地理编码失败，无法查询天气");
   } catch (error) {
+    latestLocationContext = {
+      name: fallbackName || "未知地点",
+      city: "--",
+      district: "--",
+      adcode: "",
+      lng,
+      lat
+    };
+    renderContextPanel();
     updateResult(fallbackName || "未知地点", lng, lat);
     showInfoWindow(fallbackName || "未知地点", lng, lat);
     resetWeatherPanel(`逆地理编码失败：${error.message}`);
@@ -412,6 +550,142 @@ async function doSearch() {
   }
 }
 
+function uint8ToBase64Url(bytes) {
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function textToBase64Url(text) {
+  return uint8ToBase64Url(new TextEncoder().encode(text));
+}
+
+async function signHmacSha256(raw, secret) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signatureBuffer = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw));
+  return uint8ToBase64Url(new Uint8Array(signatureBuffer));
+}
+
+async function createGlmToken(key, secret) {
+  const now = Date.now();
+  const header = {
+    alg: "HS256",
+    sign_type: "SIGN"
+  };
+  const payload = {
+    api_key: key,
+    exp: Math.floor(now / 1000) + 300,
+    timestamp: now
+  };
+  const encodedHeader = textToBase64Url(JSON.stringify(header));
+  const encodedPayload = textToBase64Url(JSON.stringify(payload));
+  const unsignedToken = `${encodedHeader}.${encodedPayload}`;
+  const signature = await signHmacSha256(unsignedToken, secret);
+  return `${unsignedToken}.${signature}`;
+}
+
+function ensureGlmConfig() {
+  if (!glmKey || !glmSecret || glmKey.startsWith("YOUR_") || glmSecret.startsWith("YOUR_")) {
+    throw new Error("请先在 index.html 的 GLM_CONFIG 中配置 key 与 secret");
+  }
+}
+
+function buildAiPrompt(contextPayload, userQuestion) {
+  const promptContext = JSON.stringify(contextPayload, null, 2);
+  return `你是天气与出行助手。请结合上下文给出准确、简洁、可执行的建议。\n\n上下文信息：\n${promptContext}\n\n用户问题：${userQuestion}`;
+}
+
+function normalizeAssistantContent(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item.text === "string") {
+          return item.text;
+        }
+        return "";
+      })
+      .filter((item) => item)
+      .join("\n");
+  }
+  return "";
+}
+
+async function requestGlmAnswer(question, contextPayload) {
+  ensureGlmConfig();
+  const token = await createGlmToken(glmKey, glmSecret);
+  const response = await fetch(GLM_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      model: CHAT_MODEL,
+      temperature: 0.7,
+      messages: [
+        {
+          role: "user",
+          content: buildAiPrompt(contextPayload, question)
+        }
+      ]
+    })
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`大模型请求失败(${response.status}) ${errorText || ""}`.trim());
+  }
+  const data = await response.json();
+  const firstChoice = data.choices && data.choices[0];
+  const assistantText = firstChoice && firstChoice.message ? normalizeAssistantContent(firstChoice.message.content) : "";
+  if (!assistantText) {
+    throw new Error("大模型返回为空");
+  }
+  return assistantText;
+}
+
+async function doChat() {
+  const question = chatInput.value.trim();
+  if (!question) {
+    return;
+  }
+  const contextPayload = createAiContextPayload();
+  const locationSnapshot = {
+    city: contextPayload.位置.城市,
+    district: contextPayload.位置.行政区
+  };
+  appendChatMessage("user", question);
+  chatInput.value = "";
+  chatSendBtn.disabled = true;
+  try {
+    const answer = await requestGlmAnswer(question, contextPayload);
+    appendChatMessage("assistant", answer, locationSnapshot);
+  } catch (error) {
+    appendChatMessage("assistant", `回答失败：${error.message}`, locationSnapshot);
+  } finally {
+    chatSendBtn.disabled = false;
+  }
+}
+
+renderContextPanel();
+appendChatMessage("assistant", "我会基于你当前选中的地点与天气数据回答问题。请先点击地图或搜索地点，再提问。", {
+  city: latestLocationContext.city,
+  district: latestLocationContext.district
+});
+
 AMapLoader.load({
   key: mapJsKey,
   version: "2.0"
@@ -436,6 +710,13 @@ AMapLoader.load({
     placeInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         doSearch();
+      }
+    });
+    chatSendBtn.addEventListener("click", doChat);
+    chatInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        doChat();
       }
     });
   })

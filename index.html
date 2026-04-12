@@ -16,7 +16,6 @@
       <div class="result" id="result-text">请点击地图或搜索地点</div>
     </header>
     <section class="content">
-      <main id="map-container" aria-label="高德地图"></main>
       <aside class="weather-panel" aria-label="天气信息">
         <div class="weather-current">
           <div class="weather-location" id="weather-location">请选择地点</div>
@@ -50,6 +49,26 @@
           </table>
         </div>
       </aside>
+      <main id="map-container" aria-label="高德地图"></main>
+      <aside class="chat-panel" aria-label="AI 对话">
+        <div class="chat-header">AI 天气助手</div>
+        <details class="context-panel" id="context-panel">
+          <summary>地图选点信息</summary>
+          <pre id="context-content">{
+  "位置": {
+    "城市": "--",
+    "行政区": "--"
+  },
+  "当前天气": "暂无",
+  "天气预报": []
+}</pre>
+        </details>
+        <div class="chat-messages" id="chat-messages" aria-label="对话消息"></div>
+        <div class="chat-input-wrap">
+          <textarea id="chat-input" placeholder="可以询问：今天适合出门吗？未来几天温差大吗？"></textarea>
+          <button id="chat-send-btn" type="button">发送</button>
+        </div>
+      </aside>
     </section>
   </div>
 
@@ -60,6 +79,10 @@
     window.AMAP_KEYS = {
       jsKey: "------",
       webServiceKey: "------"
+    };
+    window.GLM_CONFIG = {
+      key: "------",
+      secret: "------"
     };
   </script>
   <script src="https://webapi.amap.com/loader.js"></script>
