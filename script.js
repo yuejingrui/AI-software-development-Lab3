@@ -8,6 +8,7 @@ const webServiceKey = inputWebServiceKey && !inputWebServiceKey.startsWith("YOUR
 const resultText = document.getElementById("result-text");
 const placeInput = document.getElementById("place-input");
 const searchBtn = document.getElementById("search-btn");
+const clearSearchBtn = document.getElementById("clear-search-btn");
 const weatherLocation = document.getElementById("weather-location");
 const weatherTemp = document.getElementById("weather-temp");
 const weatherStatus = document.getElementById("weather-status");
@@ -96,7 +97,10 @@ function showInfoWindow(name, lng, lat) {
   infoWindow.open(map, [lng, lat]);
 }
 
-function setMarkerAndFocus(position) {
+function setMarkerAndFocus(position, forceCenter = false) {
+  if (map && typeof map.resize === "function") {
+    map.resize();
+  }
   if (!marker) {
     marker = new AMap.Marker({
       map,
@@ -106,7 +110,7 @@ function setMarkerAndFocus(position) {
   }
   marker.setPosition(position);
   const currentZoom = map.getZoom();
-  if (currentZoom < FOCUS_ZOOM) {
+  if (forceCenter || currentZoom < FOCUS_ZOOM) {
     map.setZoomAndCenter(FOCUS_ZOOM, position);
     return;
   }
@@ -950,8 +954,8 @@ async function reverseGeocodeAndLoadWeather(position, fallbackName) {
   }
 }
 
-function selectByPosition(position, fallbackName) {
-  setMarkerAndFocus(position);
+function selectByPosition(position, fallbackName, options = {}) {
+  setMarkerAndFocus(position, options.forceCenter === true);
   reverseGeocodeAndLoadWeather(position, fallbackName);
 }
 
@@ -993,7 +997,7 @@ function trySelectFromPoiEvent(event) {
   return true;
 }
 
-function selectPoi(poi, fallbackKeyword) {
+function selectPoi(poi, fallbackKeyword, options = {}) {
   if (!poi || !poi.location) {
     resultText.textContent = "未找到可定位的地点，请尝试更换关键词";
     return;
@@ -1007,7 +1011,7 @@ function selectPoi(poi, fallbackKeyword) {
     return;
   }
   const placeName = poi.name || poi.address || fallbackKeyword || "未知地点";
-  selectByPosition([lng, lat], placeName);
+  selectByPosition([lng, lat], placeName, options);
 }
 
 async function searchPlaceByKeyword(keyword) {
@@ -1036,10 +1040,23 @@ async function doSearch() {
       resultText.textContent = "未找到匹配地点，请尝试其他关键词";
       return;
     }
-    selectPoi(pois[0], keyword);
+    selectPoi(pois[0], keyword, { forceCenter: true });
   } catch (error) {
     resultText.textContent = `搜索失败：${error.message}`;
   }
+}
+
+function updateClearSearchBtnVisibility() {
+  if (!clearSearchBtn) {
+    return;
+  }
+  clearSearchBtn.style.display = placeInput.value ? "block" : "none";
+}
+
+function clearSearchInput() {
+  placeInput.value = "";
+  updateClearSearchBtnVisibility();
+  placeInput.focus();
 }
 
 function uint8ToBase64Url(bytes) {
@@ -1325,6 +1342,9 @@ function applyChatPanelLayout() {
   contentLayout.style.setProperty("--chat-panel-width", `${chatPanelWidth}px`);
   contentLayout.classList.toggle("chat-panel-collapsed", !chatPanelOpen);
   updateChatToggleButton();
+  if (map && typeof map.resize === "function") {
+    map.resize();
+  }
 }
 
 function toggleChatPanel() {
@@ -1454,7 +1474,7 @@ AMapLoader.load({
     });
     infoWindow = new AMap.InfoWindow({
       offset: new AMap.Pixel(0, -24),
-      autoMove: true
+      autoMove: false
     });
     mapReady = true;
     if (pendingLocateSession) {
@@ -1490,6 +1510,11 @@ AMapLoader.load({
     });
 
     searchBtn.addEventListener("click", doSearch);
+    if (clearSearchBtn) {
+      clearSearchBtn.addEventListener("click", clearSearchInput);
+    }
+    placeInput.addEventListener("input", updateClearSearchBtnVisibility);
+    updateClearSearchBtnVisibility();
     placeInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         doSearch();

@@ -11,7 +11,10 @@
   <div class="app">
     <header class="toolbar">
       <div class="search-group">
-        <input id="place-input" type="text" placeholder="搜索地名，例如：复旦大学" autocomplete="off">
+        <div class="search-input-wrap">
+          <input id="place-input" type="text" placeholder="搜索地名，例如：复旦大学" autocomplete="off">
+          <button id="clear-search-btn" type="button" aria-label="清空搜索内容" title="清空">×</button>
+        </div>
         <button id="search-btn" type="button">搜索</button>
       </div>
       <div class="result" id="result-text">请点击地图或搜索地点</div>
