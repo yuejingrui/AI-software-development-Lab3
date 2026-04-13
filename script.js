@@ -36,7 +36,8 @@ const CHAT_MODEL = "glm-4-flash";
 const GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 
 const FOCUS_ZOOM = 12;
-const FORECAST_DAYS = 4;
+const FUTURE_FORECAST_DAYS = 3;
+const FORECAST_DAYS = FUTURE_FORECAST_DAYS + 1;
 const CHAT_STORAGE_KEY = "weather_chat_sessions_v1";
 const ACTIVE_CHAT_STORAGE_KEY = "weather_chat_active_session_v1";
 const DEFAULT_SESSION_TITLE = "新对话";
@@ -1415,7 +1416,7 @@ renderContextPanel();
 initChatSessions();
 setHistoryDrawerOpen(false);
 if (forecastTitle) {
-  forecastTitle.textContent = `未来${FORECAST_DAYS}天天气预测`;
+  forecastTitle.textContent = `未来${FUTURE_FORECAST_DAYS}天天气预测`;
 }
 initChatPanelLayout();
 
