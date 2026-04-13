@@ -157,6 +157,7 @@ function getLocationLabel(city, district) {
 }
 
 function createAiContextPayload() {
+  const address = latestLocationContext.name || "--";
   const city = latestLocationContext.city || "--";
   const district = latestLocationContext.district || "--";
   const current = latestWeatherContext.current;
@@ -171,6 +172,7 @@ function createAiContextPayload() {
   }));
   return {
     位置: {
+      详细地址: address,
       城市: city,
       行政区: district
     },
@@ -208,6 +210,7 @@ function createSessionBase() {
     createdAt: now,
     updatedAt: now,
     messages: [],
+    contextSnapshots: [],
     lastLocation: cloneLocationContext(latestLocationContext)
   };
 }
@@ -241,6 +244,30 @@ function parseStoredSessions(rawText) {
                       district: msg.locationSnapshot.district || "--"
                     }
                   : null
+              }))
+          : [],
+        contextSnapshots: Array.isArray(item.contextSnapshots)
+          ? item.contextSnapshots
+              .filter((snapshot) => snapshot && typeof snapshot === "object")
+              .map((snapshot) => ({
+                timestamp: snapshot.timestamp || nowIsoString(),
+                location: cloneLocationContext(snapshot.location || {}),
+                currentWeather: snapshot.currentWeather
+                  ? {
+                      temperature: toNumber(snapshot.currentWeather.temperature),
+                      weather: snapshot.currentWeather.weather || "--",
+                      windSpeed: toNumber(snapshot.currentWeather.windSpeed),
+                      humidity: toNumber(snapshot.currentWeather.humidity)
+                    }
+                  : null,
+                forecast: Array.isArray(snapshot.forecast)
+                  ? snapshot.forecast.slice(0, 5).map((row) => ({
+                      date: row.date || "--",
+                      weather: row.weather || "--",
+                      low: toNumber(row.low),
+                      high: toNumber(row.high)
+                    }))
+                  : []
               }))
           : [],
         lastLocation: cloneLocationContext(item.lastLocation || {})
@@ -360,6 +387,35 @@ function updateActiveSessionLocation() {
   active.updatedAt = nowIsoString();
   saveSessionsToStorage();
   renderHistoryList();
+}
+
+function appendContextSnapshotToActiveSession() {
+  const active = getActiveSession();
+  if (!active) {
+    return;
+  }
+  const snapshot = {
+    timestamp: nowIsoString(),
+    location: cloneLocationContext(latestLocationContext),
+    currentWeather: latestWeatherContext.current
+      ? {
+          temperature: toNumber(latestWeatherContext.current.temperature),
+          weather: latestWeatherContext.current.weather || "--",
+          windSpeed: toNumber(latestWeatherContext.current.windSpeed),
+          humidity: toNumber(latestWeatherContext.current.humidity)
+        }
+      : null,
+    forecast: (latestWeatherContext.forecast || []).slice(0, 5).map((item) => ({
+      date: item.date || "--",
+      weather: item.weather || "--",
+      low: toNumber(item.low),
+      high: toNumber(item.high)
+    }))
+  };
+  active.contextSnapshots = Array.isArray(active.contextSnapshots) ? active.contextSnapshots : [];
+  active.contextSnapshots.push(snapshot);
+  active.updatedAt = nowIsoString();
+  saveSessionsToStorage();
 }
 
 function getWelcomeMessage() {
@@ -723,6 +779,7 @@ async function loadWeatherByAdcode(adcode, displayName) {
       }))
     };
     renderContextPanel();
+    appendContextSnapshotToActiveSession();
   } catch (error) {
     resetWeatherPanel(`天气加载失败：${error.message}`);
     console.error(error);
@@ -900,9 +957,81 @@ function ensureGlmConfig() {
   }
 }
 
-function buildAiPrompt(contextPayload, userQuestion) {
-  const promptContext = JSON.stringify(contextPayload, null, 2);
-  return `你是天气与出行助手。请结合上下文给出准确、简洁、可执行的建议。\n\n上下文信息：\n${promptContext}\n\n用户问题：${userQuestion}`;
+function buildSessionContextForPrompt(session, currentContextPayload) {
+  const snapshots = Array.isArray(session && session.contextSnapshots) ? session.contextSnapshots : [];
+  const locationWeatherHistory = snapshots.map((snapshot) => ({
+    时间: snapshot.timestamp || "--",
+    地点: {
+      详细地址: snapshot.location && snapshot.location.name ? snapshot.location.name : "--",
+      城市: snapshot.location && snapshot.location.city ? snapshot.location.city : "--",
+      行政区: snapshot.location && snapshot.location.district ? snapshot.location.district : "--",
+      adcode: snapshot.location && snapshot.location.adcode ? snapshot.location.adcode : "--",
+      经度: snapshot.location && Number.isFinite(snapshot.location.lng) ? snapshot.location.lng : "--",
+      纬度: snapshot.location && Number.isFinite(snapshot.location.lat) ? snapshot.location.lat : "--"
+    },
+    当前天气: snapshot.currentWeather
+      ? {
+          天气: snapshot.currentWeather.weather || "--",
+          温度: snapshot.currentWeather.temperature === null ? "--" : `${snapshot.currentWeather.temperature}℃`,
+          风速: snapshot.currentWeather.windSpeed === null ? "--" : `${snapshot.currentWeather.windSpeed}米/秒`,
+          湿度: snapshot.currentWeather.humidity === null ? "--" : `${snapshot.currentWeather.humidity}%`
+        }
+      : "暂无",
+    天气预报: (snapshot.forecast || []).map((item) => ({
+      日期: item.date || "--",
+      天气: item.weather || "--",
+      最低温: item.low === null ? "--" : `${item.low}℃`,
+      最高温: item.high === null ? "--" : `${item.high}℃`
+    }))
+  }));
+  const questionHistory = (session && Array.isArray(session.messages) ? session.messages : [])
+    .filter((msg) => msg.role === "user" && msg.content.trim())
+    .map((msg) => msg.content.trim());
+  return {
+    当前地图选点信息: currentContextPayload,
+    当前会话历史地点与天气: locationWeatherHistory,
+    当前会话提问历史: questionHistory
+  };
+}
+
+function buildAiPrompt(promptContextPayload, userQuestion) {
+  const promptContext = JSON.stringify(promptContextPayload, null, 2);
+  return [
+    "以下是隐藏上下文（不要逐字复述给用户，只用于推理）：",
+    promptContext,
+    "",
+    "请结合上下文和会话历史回答用户最新问题，明确区分“现在出发”和“稍后出发”的差异，给出可执行建议。",
+    `用户最新问题：${userQuestion}`
+  ].join("\n");
+}
+
+function formatHistoryMessageForModel(msg) {
+  if (msg.role === "assistant" && msg.locationSnapshot) {
+    const locationLine = `问题地点：${getLocationLabel(msg.locationSnapshot.city, msg.locationSnapshot.district)}`;
+    return `${locationLine}\n${msg.content}`;
+  }
+  return msg.content;
+}
+
+function buildConversationMessages(session, hiddenPrompt) {
+  const history = (session && Array.isArray(session.messages) ? session.messages : [])
+    .filter((msg) => msg && (msg.role === "user" || msg.role === "assistant") && msg.content && msg.content.trim())
+    .slice(-20)
+    .map((msg) => ({
+      role: msg.role,
+      content: formatHistoryMessageForModel(msg)
+    }));
+  return [
+    {
+      role: "system",
+      content: "你是天气与出行助手。你必须结合当前会话历史进行连续对话，不要把每个问题当作全新会话。"
+    },
+    {
+      role: "user",
+      content: hiddenPrompt
+    },
+    ...history
+  ];
 }
 
 function normalizeAssistantContent(content) {
@@ -926,17 +1055,10 @@ function normalizeAssistantContent(content) {
   return "";
 }
 
-async function requestGlmAnswer(question, contextPayload) {
-  const content = buildAiPrompt(contextPayload, question);
-  return requestGlmCompletion(
-    [
-      {
-        role: "user",
-        content
-      }
-    ],
-    0.7
-  );
+async function requestGlmAnswer(question, promptContextPayload, session) {
+  const hiddenPrompt = buildAiPrompt(promptContextPayload, question);
+  const messages = buildConversationMessages(session, hiddenPrompt);
+  return requestGlmCompletion(messages, 0.7);
 }
 
 async function requestGlmCompletion(messages, temperature) {
@@ -1059,7 +1181,9 @@ async function doChat() {
   chatInput.value = "";
   chatSendBtn.disabled = true;
   try {
-    const answer = await requestGlmAnswer(question, contextPayload);
+    const activeSession = getActiveSession();
+    const promptContextPayload = buildSessionContextForPrompt(activeSession, contextPayload);
+    const answer = await requestGlmAnswer(question, promptContextPayload, activeSession);
     appendChatMessage("assistant", answer, locationSnapshot);
   } catch (error) {
     appendChatMessage("assistant", `回答失败：${error.message}`, locationSnapshot);
