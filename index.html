@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <script src="./secret.js"></script>
   <div class="app">
     <header class="toolbar">
       <div class="search-group">
@@ -51,10 +52,21 @@
       </aside>
       <main id="map-container" aria-label="高德地图"></main>
       <aside class="chat-panel" aria-label="AI 对话">
-        <div class="chat-header">AI 天气助手</div>
-        <details class="context-panel" id="context-panel">
-          <summary>地图选点信息</summary>
-          <pre id="context-content">{
+        <div class="chat-shell">
+          <div class="history-rail" aria-label="会话操作">
+            <button id="history-toggle-btn" class="rail-btn" type="button" aria-expanded="false" aria-controls="history-drawer">历史</button>
+            <button id="new-chat-btn" class="rail-btn" type="button">新对话</button>
+          </div>
+          <aside class="history-drawer" id="history-drawer" aria-label="历史会话">
+            <div class="history-title">历史会话</div>
+            <div class="history-list" id="history-list"></div>
+            <div class="history-empty" id="history-empty">暂无历史记录</div>
+          </aside>
+          <div class="chat-main">
+            <div class="chat-header">AI 天气助手</div>
+            <details class="context-panel" id="context-panel">
+              <summary>地图选点信息</summary>
+              <pre id="context-content">{
   "位置": {
     "城市": "--",
     "行政区": "--"
@@ -62,11 +74,13 @@
   "当前天气": "暂无",
   "天气预报": []
 }</pre>
-        </details>
-        <div class="chat-messages" id="chat-messages" aria-label="对话消息"></div>
-        <div class="chat-input-wrap">
-          <textarea id="chat-input" placeholder="可以询问：今天适合出门吗？未来几天温差大吗？"></textarea>
-          <button id="chat-send-btn" type="button">发送</button>
+            </details>
+            <div class="chat-messages" id="chat-messages" aria-label="对话消息"></div>
+            <div class="chat-input-wrap">
+              <textarea id="chat-input" placeholder="可以询问：今天适合出门吗？未来几天温差大吗？"></textarea>
+              <button id="chat-send-btn" type="button">发送</button>
+            </div>
+          </div>
         </div>
       </aside>
     </section>
@@ -74,15 +88,15 @@
 
   <script>
     window._AMapSecurityConfig = {
-      securityJsCode: "------"
+      securityJsCode: YourSecurityJsCode
     };
     window.AMAP_KEYS = {
-      jsKey: "------",
-      webServiceKey: "------"
+      jsKey: YourJsKey,
+      webServiceKey: YourWebServiceKey
     };
     window.GLM_CONFIG = {
-      key: "------",
-      secret: "------"
+      key: YourKeyKey,
+      secret: YourSecret
     };
   </script>
   <script src="https://webapi.amap.com/loader.js"></script>

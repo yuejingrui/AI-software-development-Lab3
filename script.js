@@ -20,6 +20,11 @@ const contextContent = document.getElementById("context-content");
 const chatMessages = document.getElementById("chat-messages");
 const chatInput = document.getElementById("chat-input");
 const chatSendBtn = document.getElementById("chat-send-btn");
+const chatShell = document.querySelector(".chat-shell");
+const historyToggleBtn = document.getElementById("history-toggle-btn");
+const newChatBtn = document.getElementById("new-chat-btn");
+const historyList = document.getElementById("history-list");
+const historyEmpty = document.getElementById("history-empty");
 
 const glmConfig = window.GLM_CONFIG || {};
 const glmKey = (glmConfig.key || "").trim();
@@ -28,6 +33,9 @@ const CHAT_MODEL = "glm-4-flash";
 const GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 
 const FOCUS_ZOOM = 12;
+const CHAT_STORAGE_KEY = "weather_chat_sessions_v1";
+const ACTIVE_CHAT_STORAGE_KEY = "weather_chat_active_session_v1";
+const DEFAULT_SESSION_TITLE = "新对话";
 const RED_PIN_CONTENT = `
   <div style="position: relative; width: 22px; height: 22px; background: #ff4d4f; border-radius: 50% 50% 50% 0; transform: translate(-50%, -100%) rotate(-45deg); box-shadow: 0 2px 8px rgba(255, 77, 79, 0.35);">
     <div style="position: absolute; width: 8px; height: 8px; background: #ffffff; border-radius: 50%; top: 7px; left: 7px;"></div>
@@ -38,6 +46,9 @@ const BEAUFORT_MPS = [0.1, 0.9, 2.4, 4.4, 6.7, 9.4, 12.3, 15.5, 19.0, 22.6, 26.5
 let map;
 let marker;
 let infoWindow;
+let mapReady = false;
+let pendingLocateSession = null;
+let titleGenerating = false;
 let latestLocationContext = {
   name: "未选择地点",
   city: "--",
@@ -50,6 +61,8 @@ let latestWeatherContext = {
   current: null,
   forecast: []
 };
+let chatSessions = [];
+let activeSessionId = "";
 
 function updateResult(name, lng, lat) {
   const placeName = name && name.trim() ? name : "未知地点";
@@ -171,6 +184,270 @@ function renderContextPanel() {
   contextContent.textContent = JSON.stringify(payload, null, 2);
 }
 
+function cloneLocationContext(source) {
+  return {
+    name: source && source.name ? source.name : "未选择地点",
+    city: source && source.city ? source.city : "--",
+    district: source && source.district ? source.district : "--",
+    adcode: source && source.adcode ? source.adcode : "",
+    lng: source && Number.isFinite(source.lng) ? source.lng : null,
+    lat: source && Number.isFinite(source.lat) ? source.lat : null
+  };
+}
+
+function nowIsoString() {
+  return new Date().toISOString();
+}
+
+function createSessionBase() {
+  const id = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const now = nowIsoString();
+  return {
+    id,
+    title: DEFAULT_SESSION_TITLE,
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+    lastLocation: cloneLocationContext(latestLocationContext)
+  };
+}
+
+function parseStoredSessions(rawText) {
+  if (!rawText) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(rawText);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({
+        id: String(item.id || ""),
+        title: String(item.title || DEFAULT_SESSION_TITLE),
+        createdAt: item.createdAt || nowIsoString(),
+        updatedAt: item.updatedAt || item.createdAt || nowIsoString(),
+        messages: Array.isArray(item.messages)
+          ? item.messages
+              .filter((msg) => msg && (msg.role === "user" || msg.role === "assistant"))
+              .map((msg) => ({
+                role: msg.role,
+                content: String(msg.content || ""),
+                timestamp: msg.timestamp || nowIsoString(),
+                locationSnapshot: msg.locationSnapshot
+                  ? {
+                      city: msg.locationSnapshot.city || "--",
+                      district: msg.locationSnapshot.district || "--"
+                    }
+                  : null
+              }))
+          : [],
+        lastLocation: cloneLocationContext(item.lastLocation || {})
+      }))
+      .filter((item) => item.id);
+  } catch (error) {
+    console.warn("历史会话解析失败，将重置本地会话数据。", error);
+    return [];
+  }
+}
+
+function saveSessionsToStorage() {
+  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatSessions));
+  if (activeSessionId) {
+    localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, activeSessionId);
+  }
+}
+
+function getActiveSession() {
+  return chatSessions.find((item) => item.id === activeSessionId) || null;
+}
+
+function getSessionPreview(session) {
+  const firstUser = session.messages.find((msg) => msg.role === "user" && msg.content.trim());
+  if (firstUser) {
+    return firstUser.content;
+  }
+  return "暂无提问内容";
+}
+
+function hasUserDialogue(session) {
+  return session.messages.some((msg) => msg.role === "user" && msg.content.trim());
+}
+
+function getLastAnswerTimestamp(session) {
+  const assistantMessages = session.messages.filter((msg) => msg.role === "assistant" && msg.timestamp);
+  if (!assistantMessages.length) {
+    return "";
+  }
+  const latest = assistantMessages.reduce((best, current) => {
+    const bestTime = new Date(best.timestamp).getTime();
+    const currentTime = new Date(current.timestamp).getTime();
+    if (Number.isNaN(currentTime)) {
+      return best;
+    }
+    if (Number.isNaN(bestTime) || currentTime > bestTime) {
+      return current;
+    }
+    return best;
+  }, assistantMessages[0]);
+  return latest.timestamp || "";
+}
+
+function getLastAnswerSortValue(session) {
+  const iso = getLastAnswerTimestamp(session);
+  const time = new Date(iso).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function formatHistoryTime(isoText) {
+  const date = new Date(isoText);
+  if (Number.isNaN(date.getTime())) {
+    return "--";
+  }
+  const now = new Date();
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  if (isToday) {
+    return `${hour}:${minute}`;
+  }
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function renderHistoryList() {
+  historyList.innerHTML = "";
+  const visibleSessions = chatSessions
+    .filter((session) => hasUserDialogue(session))
+    .sort((a, b) => getLastAnswerSortValue(b) - getLastAnswerSortValue(a));
+  if (!visibleSessions.length) {
+    historyEmpty.style.display = "block";
+    return;
+  }
+  historyEmpty.style.display = "none";
+  visibleSessions.forEach((session) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `history-item${session.id === activeSessionId ? " active" : ""}`;
+    button.dataset.sessionId = session.id;
+    button.innerHTML = `
+      <div class="history-item-title">${escapeHtml(session.title || DEFAULT_SESSION_TITLE)}</div>
+      <div class="history-item-time">最后回答：${formatHistoryTime(getLastAnswerTimestamp(session))}</div>
+      <div class="history-item-preview">${escapeHtml(getSessionPreview(session))}</div>
+    `;
+    historyList.appendChild(button);
+  });
+}
+
+function setHistoryDrawerOpen(open) {
+  const isOpen = Boolean(open);
+  chatShell.classList.toggle("history-open", isOpen);
+  historyToggleBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+}
+
+function updateActiveSessionLocation() {
+  const active = getActiveSession();
+  if (!active) {
+    return;
+  }
+  active.lastLocation = cloneLocationContext(latestLocationContext);
+  active.updatedAt = nowIsoString();
+  saveSessionsToStorage();
+  renderHistoryList();
+}
+
+function getWelcomeMessage() {
+  return "我会基于你当前选中的地点与天气数据回答问题。请先点击地图或搜索地点，再提问。";
+}
+
+function createWelcomeRecord() {
+  return {
+    role: "assistant",
+    content: getWelcomeMessage(),
+    timestamp: nowIsoString(),
+    locationSnapshot: {
+      city: latestLocationContext.city,
+      district: latestLocationContext.district
+    }
+  };
+}
+
+function renderSessionMessages(session) {
+  chatMessages.innerHTML = "";
+  if (!session.messages.length) {
+    return;
+  }
+  session.messages.forEach((msg) => {
+    renderChatMessage(msg.role, msg.content, msg.locationSnapshot || null);
+  });
+}
+
+function restoreSessionContext(session) {
+  latestLocationContext = cloneLocationContext(session.lastLocation || {});
+  renderContextPanel();
+  if (!Number.isFinite(latestLocationContext.lng) || !Number.isFinite(latestLocationContext.lat)) {
+    resetWeatherPanel("请选择地点查看天气");
+  }
+}
+
+function locateToSessionLastLocation(session) {
+  const lastLocation = cloneLocationContext(session.lastLocation || {});
+  if (!Number.isFinite(lastLocation.lng) || !Number.isFinite(lastLocation.lat)) {
+    return;
+  }
+  if (!mapReady) {
+    pendingLocateSession = session.id;
+    return;
+  }
+  selectByPosition([lastLocation.lng, lastLocation.lat], lastLocation.name || "历史会话地点");
+}
+
+function switchSession(sessionId, options = {}) {
+  const target = chatSessions.find((item) => item.id === sessionId);
+  if (!target) {
+    return;
+  }
+  activeSessionId = target.id;
+  saveSessionsToStorage();
+  renderSessionMessages(target);
+  restoreSessionContext(target);
+  renderHistoryList();
+  if (options.locate !== false) {
+    locateToSessionLastLocation(target);
+  }
+}
+
+function createNewSession() {
+  const session = createSessionBase();
+  session.messages.push(createWelcomeRecord());
+  chatSessions.push(session);
+  activeSessionId = session.id;
+  saveSessionsToStorage();
+  renderHistoryList();
+  renderSessionMessages(session);
+}
+
+function initChatSessions() {
+  chatSessions = parseStoredSessions(localStorage.getItem(CHAT_STORAGE_KEY));
+  const storedActiveId = localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY) || "";
+  if (!chatSessions.length) {
+    createNewSession();
+    return;
+  }
+  const fallbackSession = chatSessions[0];
+  const targetSession = chatSessions.find((item) => item.id === storedActiveId) || fallbackSession;
+  if (!targetSession.messages.length) {
+    targetSession.messages.push(createWelcomeRecord());
+  }
+  switchSession(targetSession.id, { locate: false });
+}
+
 function escapeHtml(rawText) {
   return String(rawText || "")
     .replaceAll("&", "&amp;")
@@ -180,7 +457,7 @@ function escapeHtml(rawText) {
     .replaceAll("'", "&#39;");
 }
 
-function appendChatMessage(role, content, locationSnapshot) {
+function renderChatMessage(role, content, locationSnapshot) {
   const wrapper = document.createElement("div");
   wrapper.className = `chat-message ${role}`;
   if (role === "assistant" && locationSnapshot) {
@@ -194,6 +471,28 @@ function appendChatMessage(role, content, locationSnapshot) {
   wrapper.appendChild(textNode);
   chatMessages.appendChild(wrapper);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function appendChatMessage(role, content, locationSnapshot, options = {}) {
+  const shouldPersist = options.persist !== false;
+  renderChatMessage(role, content, locationSnapshot);
+  if (!shouldPersist) {
+    return;
+  }
+  const active = getActiveSession();
+  if (!active) {
+    return;
+  }
+  active.messages.push({
+    role,
+    content,
+    timestamp: nowIsoString(),
+    locationSnapshot: locationSnapshot || null
+  });
+  active.updatedAt = nowIsoString();
+  active.lastLocation = cloneLocationContext(latestLocationContext);
+  saveSessionsToStorage();
+  renderHistoryList();
 }
 
 function resetWeatherPanel(message) {
@@ -463,6 +762,7 @@ async function reverseGeocodeAndLoadWeather(position, fallbackName) {
         lat
       };
       renderContextPanel();
+      updateActiveSessionLocation();
       updateResult(formattedAddress, lng, lat);
       showInfoWindow(formattedAddress, lng, lat);
       loadWeatherByAdcode(adcode, formattedAddress);
@@ -477,6 +777,7 @@ async function reverseGeocodeAndLoadWeather(position, fallbackName) {
       lat
     };
     renderContextPanel();
+    updateActiveSessionLocation();
     updateResult(fallbackName || "未知地点", lng, lat);
     showInfoWindow(fallbackName || "未知地点", lng, lat);
     resetWeatherPanel("逆地理编码失败，无法查询天气");
@@ -490,6 +791,7 @@ async function reverseGeocodeAndLoadWeather(position, fallbackName) {
       lat
     };
     renderContextPanel();
+    updateActiveSessionLocation();
     updateResult(fallbackName || "未知地点", lng, lat);
     showInfoWindow(fallbackName || "未知地点", lng, lat);
     resetWeatherPanel(`逆地理编码失败：${error.message}`);
@@ -625,6 +927,19 @@ function normalizeAssistantContent(content) {
 }
 
 async function requestGlmAnswer(question, contextPayload) {
+  const content = buildAiPrompt(contextPayload, question);
+  return requestGlmCompletion(
+    [
+      {
+        role: "user",
+        content
+      }
+    ],
+    0.7
+  );
+}
+
+async function requestGlmCompletion(messages, temperature) {
   ensureGlmConfig();
   const token = await createGlmToken(glmKey, glmSecret);
   const response = await fetch(GLM_API_URL, {
@@ -635,13 +950,8 @@ async function requestGlmAnswer(question, contextPayload) {
     },
     body: JSON.stringify({
       model: CHAT_MODEL,
-      temperature: 0.7,
-      messages: [
-        {
-          role: "user",
-          content: buildAiPrompt(contextPayload, question)
-        }
-      ]
+      temperature,
+      messages
     })
   });
   if (!response.ok) {
@@ -655,6 +965,84 @@ async function requestGlmAnswer(question, contextPayload) {
     throw new Error("大模型返回为空");
   }
   return assistantText;
+}
+
+function buildFallbackSessionTitle(session) {
+  const location = session.lastLocation || {};
+  const locationLabel = `${location.city || ""}${location.district || ""}`.trim();
+  const firstUser = session.messages.find((msg) => msg.role === "user" && msg.content.trim());
+  const questionPart = firstUser ? firstUser.content.replace(/\s+/g, "").slice(0, 12) : "";
+  if (locationLabel && questionPart) {
+    return `${locationLabel}：${questionPart}`;
+  }
+  if (locationLabel) {
+    return `${locationLabel}天气对话`;
+  }
+  if (questionPart) {
+    return `对话：${questionPart}`;
+  }
+  return DEFAULT_SESSION_TITLE;
+}
+
+async function generateSessionTitle(session) {
+  const fallbackTitle = buildFallbackSessionTitle(session);
+  const usableMessages = session.messages.filter((msg) => msg.content && msg.content.trim()).slice(0, 6);
+  if (!usableMessages.length) {
+    return fallbackTitle;
+  }
+  if (!glmKey || !glmSecret || glmKey.startsWith("YOUR_") || glmSecret.startsWith("YOUR_")) {
+    return fallbackTitle;
+  }
+  try {
+    const compactMessages = usableMessages
+      .map((msg) => `${msg.role === "user" ? "用户" : "助手"}：${msg.content}`)
+      .join("\n");
+    const prompt = [
+      "请为这段天气相关对话生成一个简短中文标题。",
+      "要求：不超过14个汉字，不加引号，不使用句号。",
+      `地点信息：${(session.lastLocation && `${session.lastLocation.city || "--"} ${session.lastLocation.district || "--"}`) || "--"}`,
+      `对话内容：\n${compactMessages}`
+    ].join("\n");
+    const title = await requestGlmCompletion(
+      [
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      0.3
+    );
+    const cleaned = title.replace(/["'“”‘’。]/g, "").trim().slice(0, 18);
+    return cleaned || fallbackTitle;
+  } catch (error) {
+    console.warn("会话命名失败，使用本地命名。", error);
+    return fallbackTitle;
+  }
+}
+
+async function maybeRenameActiveSession() {
+  const active = getActiveSession();
+  if (!active || titleGenerating) {
+    return;
+  }
+  const hasQuestion = active.messages.some((msg) => msg.role === "user" && msg.content.trim());
+  if (!hasQuestion) {
+    return;
+  }
+  titleGenerating = true;
+  try {
+    const newTitle = await generateSessionTitle(active);
+    const latestActive = getActiveSession();
+    if (!latestActive) {
+      return;
+    }
+    latestActive.title = newTitle || DEFAULT_SESSION_TITLE;
+    latestActive.updatedAt = nowIsoString();
+    saveSessionsToStorage();
+    renderHistoryList();
+  } finally {
+    titleGenerating = false;
+  }
 }
 
 async function doChat() {
@@ -676,14 +1064,36 @@ async function doChat() {
   } catch (error) {
     appendChatMessage("assistant", `回答失败：${error.message}`, locationSnapshot);
   } finally {
+    maybeRenameActiveSession();
     chatSendBtn.disabled = false;
   }
 }
 
 renderContextPanel();
-appendChatMessage("assistant", "我会基于你当前选中的地点与天气数据回答问题。请先点击地图或搜索地点，再提问。", {
-  city: latestLocationContext.city,
-  district: latestLocationContext.district
+initChatSessions();
+setHistoryDrawerOpen(false);
+
+historyToggleBtn.addEventListener("click", () => {
+  const isOpen = chatShell.classList.contains("history-open");
+  setHistoryDrawerOpen(!isOpen);
+});
+
+newChatBtn.addEventListener("click", () => {
+  createNewSession();
+  setHistoryDrawerOpen(false);
+});
+
+historyList.addEventListener("click", (event) => {
+  const target = event.target.closest(".history-item");
+  if (!target) {
+    return;
+  }
+  const sessionId = target.dataset.sessionId;
+  if (!sessionId) {
+    return;
+  }
+  switchSession(sessionId);
+  setHistoryDrawerOpen(false);
 });
 
 AMapLoader.load({
@@ -699,6 +1109,19 @@ AMapLoader.load({
       offset: new AMap.Pixel(0, -24),
       autoMove: true
     });
+    mapReady = true;
+    if (pendingLocateSession) {
+      const target = chatSessions.find((item) => item.id === pendingLocateSession);
+      if (target) {
+        locateToSessionLastLocation(target);
+      }
+      pendingLocateSession = null;
+    } else {
+      const active = getActiveSession();
+      if (active) {
+        locateToSessionLastLocation(active);
+      }
+    }
 
     map.on("click", (event) => {
       const lng = event.lnglat.getLng();

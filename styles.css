@@ -176,10 +176,127 @@ body {
 .chat-panel {
   border-left: 1px solid #e6e8eb;
   background: #ffffff;
+  display: block;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-shell {
+  display: grid;
+  grid-template-columns: 48px 0 1fr;
+  height: 100%;
+  min-height: 0;
+  transition: grid-template-columns 0.2s ease;
+}
+
+.chat-shell.history-open {
+  grid-template-columns: 48px 220px 1fr;
+}
+
+.history-rail {
+  border-right: 1px solid #edf0f2;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px;
+}
+
+.rail-btn {
+  width: 100%;
+  border: 1px solid #c9ced6;
+  border-radius: 6px;
+  padding: 8px 4px;
+  background: #fff;
+  color: #2f3640;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rail-btn:hover {
+  border-color: #1677ff;
+  color: #1677ff;
+}
+
+.history-drawer {
+  border-right: 1px solid #edf0f2;
+  background: #f9fafb;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease;
+}
+
+.chat-shell.history-open .history-drawer {
+  opacity: 1;
+  visibility: visible;
+}
+
+.history-title {
+  padding: 12px;
+  border-bottom: 1px solid #edf0f2;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2329;
+}
+
+.history-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.history-empty {
+  padding: 0 12px 12px;
+  font-size: 12px;
+  color: #8c8f94;
+  display: none;
+}
+
+.history-item {
+  width: 100%;
+  border: 1px solid #e1e6eb;
+  border-radius: 8px;
+  background: #fff;
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.history-item.active {
+  border-color: #1677ff;
+  background: #edf4ff;
+}
+
+.history-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2329;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.history-item-time,
+.history-item-preview {
+  font-size: 12px;
+  color: #60656d;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.chat-main {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
 }
 
 .chat-header {
@@ -307,5 +424,9 @@ body {
   .chat-panel {
     border-left: 0;
     border-top: 1px solid #e6e8eb;
+  }
+
+  .chat-shell.history-open {
+    grid-template-columns: 48px 180px 1fr;
   }
 }
