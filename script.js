@@ -49,6 +49,7 @@ let infoWindow;
 let mapReady = false;
 let pendingLocateSession = null;
 let titleGenerating = false;
+let lastPoiSelectAt = 0;
 let latestLocationContext = {
   name: "未选择地点",
   city: "--",
@@ -860,6 +861,44 @@ function selectByPosition(position, fallbackName) {
   reverseGeocodeAndLoadWeather(position, fallbackName);
 }
 
+function getLngLatFromUnknownLocation(locationLike) {
+  if (!locationLike) {
+    return null;
+  }
+  if (typeof locationLike.getLng === "function" && typeof locationLike.getLat === "function") {
+    const lng = Number(locationLike.getLng());
+    const lat = Number(locationLike.getLat());
+    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
+  }
+  if (typeof locationLike.lng === "number" && typeof locationLike.lat === "number") {
+    return [locationLike.lng, locationLike.lat];
+  }
+  if (typeof locationLike === "string") {
+    const [lngText, latText] = locationLike.split(",");
+    const lng = Number(lngText);
+    const lat = Number(latText);
+    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
+  }
+  return null;
+}
+
+function trySelectFromPoiEvent(event) {
+  if (!event) {
+    return false;
+  }
+  const poi = event.poi || {};
+  const poiName = poi.name || event.name || "地图地标";
+  const poiPosition =
+    getLngLatFromUnknownLocation(poi.location) ||
+    getLngLatFromUnknownLocation(event.lnglat) ||
+    null;
+  if (!poiPosition) {
+    return false;
+  }
+  selectByPosition(poiPosition, poiName);
+  return true;
+}
+
 function selectPoi(poi, fallbackKeyword) {
   if (!poi || !poi.location) {
     resultText.textContent = "未找到可定位的地点，请尝试更换关键词";
@@ -1247,7 +1286,20 @@ AMapLoader.load({
       }
     }
 
+    map.on("hotspotclick", (event) => {
+      if (trySelectFromPoiEvent(event)) {
+        lastPoiSelectAt = Date.now();
+      }
+    });
+
     map.on("click", (event) => {
+      if (Date.now() - lastPoiSelectAt < 250) {
+        return;
+      }
+      if (trySelectFromPoiEvent(event)) {
+        lastPoiSelectAt = Date.now();
+        return;
+      }
       const lng = event.lnglat.getLng();
       const lat = event.lnglat.getLat();
       selectByPosition([lng, lat], "地图选点");
