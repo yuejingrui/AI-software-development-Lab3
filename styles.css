@@ -69,7 +69,14 @@ body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 360px minmax(420px, 1fr) 380px;
+  position: relative;
+  --chat-panel-width: 380px;
+  grid-template-columns: 360px minmax(420px, 1fr) var(--chat-panel-width);
+  transition: grid-template-columns 0.2s ease;
+}
+
+.content.chat-panel-collapsed {
+  grid-template-columns: 360px minmax(420px, 1fr) 0;
 }
 
 .weather-panel {
@@ -179,6 +186,48 @@ body {
   display: block;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+}
+
+.content.chat-panel-collapsed .chat-panel {
+  border-left: 0;
+  pointer-events: none;
+}
+
+.chat-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 8px;
+  height: 100%;
+  transform: translateX(-50%);
+  cursor: ew-resize;
+  z-index: 5;
+}
+
+.chat-panel-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translate(50%, -50%);
+  width: 22px;
+  height: 64px;
+  border: 1px solid #d5dae0;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #2f3640;
+  cursor: pointer;
+  z-index: 8;
+}
+
+.chat-panel-toggle:hover {
+  color: #1677ff;
+  border-color: #1677ff;
+}
+
+.chat-resizing {
+  user-select: none;
+  cursor: ew-resize;
 }
 
 .chat-shell {
@@ -416,6 +465,10 @@ body {
     grid-template-rows: auto minmax(360px, 1fr) auto;
   }
 
+  .content.chat-panel-collapsed {
+    grid-template-columns: 1fr;
+  }
+
   .weather-panel {
     border-right: 0;
     border-bottom: 1px solid #e6e8eb;
@@ -428,5 +481,10 @@ body {
 
   .chat-shell.history-open {
     grid-template-columns: 48px 180px 1fr;
+  }
+
+  .chat-panel-toggle,
+  .chat-resize-handle {
+    display: none;
   }
 }

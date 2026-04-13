@@ -25,6 +25,9 @@ const historyToggleBtn = document.getElementById("history-toggle-btn");
 const newChatBtn = document.getElementById("new-chat-btn");
 const historyList = document.getElementById("history-list");
 const historyEmpty = document.getElementById("history-empty");
+const contentLayout = document.querySelector(".content");
+const chatPanel = document.querySelector(".chat-panel");
+const forecastTitle = document.querySelector(".forecast-title");
 
 const glmConfig = window.GLM_CONFIG || {};
 const glmKey = (glmConfig.key || "").trim();
@@ -33,6 +36,7 @@ const CHAT_MODEL = "glm-4-flash";
 const GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 
 const FOCUS_ZOOM = 12;
+const FORECAST_DAYS = 4;
 const CHAT_STORAGE_KEY = "weather_chat_sessions_v1";
 const ACTIVE_CHAT_STORAGE_KEY = "weather_chat_active_session_v1";
 const DEFAULT_SESSION_TITLE = "新对话";
@@ -50,6 +54,14 @@ let mapReady = false;
 let pendingLocateSession = null;
 let titleGenerating = false;
 let lastPoiSelectAt = 0;
+let chatToggleBtn = null;
+let chatResizeHandle = null;
+let chatPanelOpen = true;
+let chatPanelWidth = 380;
+let isChatResizing = false;
+let chatResizeStartX = 0;
+let chatResizeStartWidth = 0;
+let chatResizeMinWidth = 320;
 let latestLocationContext = {
   name: "未选择地点",
   city: "--",
@@ -262,7 +274,7 @@ function parseStoredSessions(rawText) {
                     }
                   : null,
                 forecast: Array.isArray(snapshot.forecast)
-                  ? snapshot.forecast.slice(0, 5).map((row) => ({
+                  ? snapshot.forecast.slice(0, FORECAST_DAYS).map((row) => ({
                       date: row.date || "--",
                       weather: row.weather || "--",
                       low: toNumber(row.low),
@@ -406,7 +418,7 @@ function appendContextSnapshotToActiveSession() {
           humidity: toNumber(latestWeatherContext.current.humidity)
         }
       : null,
-    forecast: (latestWeatherContext.forecast || []).slice(0, 5).map((item) => ({
+    forecast: (latestWeatherContext.forecast || []).slice(0, FORECAST_DAYS).map((item) => ({
       date: item.date || "--",
       weather: item.weather || "--",
       low: toNumber(item.low),
@@ -581,7 +593,7 @@ function renderCurrentWeather(live, displayName) {
 }
 
 function getForecastRows(casts) {
-  const normalized = (casts || []).slice(0, 5).map((item, index) => {
+  const normalized = (casts || []).slice(0, FORECAST_DAYS).map((item, index) => {
     const low = toNumber(item.nighttemp);
     const high = toNumber(item.daytemp);
     return {
@@ -591,7 +603,7 @@ function getForecastRows(casts) {
       high
     };
   });
-  while (normalized.length < 5) {
+  while (normalized.length < FORECAST_DAYS) {
     normalized.push({
       label: `第${normalized.length + 1}天`,
       weather: "--",
@@ -643,6 +655,75 @@ function drawDots(ctx, points, color) {
   });
 }
 
+function drawWeatherGlyph(ctx, weatherText, x, y) {
+  const text = String(weatherText || "");
+  ctx.save();
+  ctx.lineWidth = 1.5;
+  if (text.includes("晴")) {
+    ctx.strokeStyle = "#faad14";
+    ctx.fillStyle = "#faad14";
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    for (let i = 0; i < 8; i += 1) {
+      const angle = (Math.PI / 4) * i;
+      const sx = x + Math.cos(angle) * 9;
+      const sy = y + Math.sin(angle) * 9;
+      const ex = x + Math.cos(angle) * 12;
+      const ey = y + Math.sin(angle) * 12;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+  if (text.includes("雨")) {
+    ctx.fillStyle = "#91b9ff";
+    ctx.beginPath();
+    ctx.arc(x - 4, y - 1, 4, Math.PI, Math.PI * 2);
+    ctx.arc(x + 1, y - 3, 5, Math.PI, Math.PI * 2);
+    ctx.arc(x + 6, y - 1, 4, Math.PI, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#4a9fff";
+    [-5, 0, 5].forEach((dx) => {
+      ctx.beginPath();
+      ctx.moveTo(x + dx, y + 5);
+      ctx.lineTo(x + dx - 2, y + 9);
+      ctx.stroke();
+    });
+    ctx.restore();
+    return;
+  }
+  if (text.includes("雪")) {
+    ctx.fillStyle = "#d6e4ff";
+    ctx.beginPath();
+    ctx.arc(x - 4, y - 1, 4, Math.PI, Math.PI * 2);
+    ctx.arc(x + 1, y - 3, 5, Math.PI, Math.PI * 2);
+    ctx.arc(x + 6, y - 1, 4, Math.PI, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#8c8f94";
+    [-4, 1, 6].forEach((dx) => {
+      ctx.beginPath();
+      ctx.moveTo(x + dx - 2, y + 7);
+      ctx.lineTo(x + dx + 2, y + 11);
+      ctx.moveTo(x + dx + 2, y + 7);
+      ctx.lineTo(x + dx - 2, y + 11);
+      ctx.stroke();
+    });
+    ctx.restore();
+    return;
+  }
+  ctx.fillStyle = text.includes("阴") || text.includes("云") ? "#9aa5b1" : "#c0c4cc";
+  ctx.beginPath();
+  ctx.arc(x - 4, y, 4, Math.PI, Math.PI * 2);
+  ctx.arc(x + 1, y - 2, 5, Math.PI, Math.PI * 2);
+  ctx.arc(x + 7, y, 4, Math.PI, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawTempChart(rows) {
   const ctx = tempChart.getContext("2d");
   const width = tempChart.width;
@@ -665,7 +746,9 @@ function drawTempChart(rows) {
   const left = 20;
   const right = width - 20;
   const top = 16;
-  const bottom = height - 24;
+  const bottom = height - 66;
+  const weatherRowY = height - 34;
+  const dateRowY = height - 12;
   const stepX = (right - left) / Math.max(1, rows.length - 1);
 
   const toY = (temp) => bottom - ((temp - min) / range) * (bottom - top);
@@ -702,6 +785,16 @@ function drawTempChart(rows) {
   ctx.font = "12px sans-serif";
   highPoints.forEach((point) => {
     ctx.fillText(`${point.temp}℃`, point.x - 14, point.y - 8);
+  });
+  lowPoints.forEach((point) => {
+    const labelY = Math.min(weatherRowY - 10, point.y + 15);
+    ctx.fillText(`${point.temp}℃`, point.x - 14, labelY);
+  });
+  rows.forEach((row, index) => {
+    const x = left + index * stepX;
+    drawWeatherGlyph(ctx, row.weather, x, weatherRowY - 6);
+    ctx.fillStyle = "#5b6270";
+    ctx.fillText(row.label, x - 20, dateRowY);
   });
 }
 
@@ -1206,6 +1299,92 @@ async function maybeRenameActiveSession() {
   }
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getChatPanelMaxWidth() {
+  return Math.max(320, Math.floor(window.innerWidth / 2));
+}
+
+function updateChatToggleButton() {
+  if (!chatToggleBtn) {
+    return;
+  }
+  chatToggleBtn.textContent = chatPanelOpen ? ">" : "<";
+  chatToggleBtn.setAttribute("aria-label", chatPanelOpen ? "关闭聊天栏" : "展开聊天栏");
+}
+
+function applyChatPanelLayout() {
+  if (!contentLayout || !chatPanel) {
+    return;
+  }
+  const maxWidth = getChatPanelMaxWidth();
+  chatPanelWidth = clamp(chatPanelWidth, 320, maxWidth);
+  contentLayout.style.setProperty("--chat-panel-width", `${chatPanelWidth}px`);
+  contentLayout.classList.toggle("chat-panel-collapsed", !chatPanelOpen);
+  updateChatToggleButton();
+}
+
+function toggleChatPanel() {
+  chatPanelOpen = !chatPanelOpen;
+  applyChatPanelLayout();
+}
+
+function handleChatResizeStart(event) {
+  if (!chatPanelOpen) {
+    return;
+  }
+  isChatResizing = true;
+  chatResizeStartX = event.clientX;
+  chatResizeStartWidth = chatPanelWidth;
+  chatResizeMinWidth = chatPanelWidth;
+  document.body.classList.add("chat-resizing");
+  event.preventDefault();
+}
+
+function handleChatResizeMove(event) {
+  if (!isChatResizing) {
+    return;
+  }
+  const delta = chatResizeStartX - event.clientX;
+  const maxWidth = getChatPanelMaxWidth();
+  chatPanelWidth = clamp(chatResizeStartWidth + delta, chatResizeMinWidth, maxWidth);
+  applyChatPanelLayout();
+}
+
+function handleChatResizeEnd() {
+  if (!isChatResizing) {
+    return;
+  }
+  isChatResizing = false;
+  document.body.classList.remove("chat-resizing");
+}
+
+function initChatPanelLayout() {
+  if (!contentLayout || !chatPanel) {
+    return;
+  }
+  chatPanelWidth = clamp(chatPanel.getBoundingClientRect().width || 380, 320, getChatPanelMaxWidth());
+
+  chatToggleBtn = document.createElement("button");
+  chatToggleBtn.type = "button";
+  chatToggleBtn.className = "chat-panel-toggle";
+  chatToggleBtn.addEventListener("click", toggleChatPanel);
+
+  chatResizeHandle = document.createElement("div");
+  chatResizeHandle.className = "chat-resize-handle";
+  chatResizeHandle.addEventListener("mousedown", handleChatResizeStart);
+
+  contentLayout.appendChild(chatToggleBtn);
+  chatPanel.appendChild(chatResizeHandle);
+  applyChatPanelLayout();
+
+  window.addEventListener("mousemove", handleChatResizeMove);
+  window.addEventListener("mouseup", handleChatResizeEnd);
+  window.addEventListener("resize", applyChatPanelLayout);
+}
+
 async function doChat() {
   const question = chatInput.value.trim();
   if (!question) {
@@ -1235,6 +1414,10 @@ async function doChat() {
 renderContextPanel();
 initChatSessions();
 setHistoryDrawerOpen(false);
+if (forecastTitle) {
+  forecastTitle.textContent = `未来${FORECAST_DAYS}天天气预测`;
+}
+initChatPanelLayout();
 
 historyToggleBtn.addEventListener("click", () => {
   const isOpen = chatShell.classList.contains("history-open");
